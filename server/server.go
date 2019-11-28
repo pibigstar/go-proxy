@@ -33,12 +33,12 @@ func (c *client) Read() {
 	for {
 		data := make([]byte, 10240)
 
-		_, err := c.conn.Read(data)
+		n, err := c.conn.Read(data)
 		if err != nil && err != io.EOF {
 			c.exit <- err
 			reConnChan <- true
 		}
-		c.read <- data[:]
+		c.read <- data[:n]
 	}
 }
 
@@ -68,12 +68,12 @@ func (u *user) Read() {
 	_ = u.conn.SetReadDeadline(time.Now().Add(time.Second * 200))
 	for {
 		data := make([]byte, 10240)
-		_, err := u.conn.Read(data)
+		n, err := u.conn.Read(data)
 		if err != nil && err != io.EOF {
 			u.exit <- err
 			reConnChan <- true
 		}
-		u.read <- data[:]
+		u.read <- data[:n]
 	}
 }
 
