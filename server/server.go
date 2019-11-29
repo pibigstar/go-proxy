@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"time"
 )
 
 var (
 	localPort  int
 	remotePort int
-	reConnChan = make(chan bool)
 )
 
 func init() {
@@ -25,23 +25,33 @@ type client struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit chan error
+	exit  chan error
+	close chan error
 }
 
+// 从Client端读取数据
 func (c *client) Read() {
-	_ = c.conn.SetReadDeadline(time.Now().Add(time.Second * 5))
 	for {
+		_ = c.conn.SetReadDeadline(time.Now().Add(time.Second * 60))
 		data := make([]byte, 10240)
-
 		n, err := c.conn.Read(data)
+
 		if err != nil && err != io.EOF {
+			fmt.Println("读取出现错误...")
 			c.exit <- err
-			reConnChan <- true
+			c.close <- err
+		}
+
+		// 收到心跳包，原样返回
+		if data[0] == 'p' && data[1] == 'i' {
+			c.conn.Write([]byte("pi"))
+			continue
 		}
 		c.read <- data[:n]
 	}
 }
 
+// 将数据写入到Client端
 func (c *client) Write() {
 	for {
 		select {
@@ -49,7 +59,7 @@ func (c *client) Write() {
 			_, err := c.conn.Write(data)
 			if err != nil && err != io.EOF {
 				c.exit <- err
-				reConnChan <- true
+				c.close <- err
 			}
 		}
 	}
@@ -61,9 +71,11 @@ type user struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit chan error
+	exit  chan error
+	close chan error
 }
 
+// 从User端读取数据
 func (u *user) Read() {
 	_ = u.conn.SetReadDeadline(time.Now().Add(time.Second * 200))
 	for {
@@ -71,12 +83,13 @@ func (u *user) Read() {
 		n, err := u.conn.Read(data)
 		if err != nil && err != io.EOF {
 			u.exit <- err
-			reConnChan <- true
+			u.close <- err
 		}
 		u.read <- data[:n]
 	}
 }
 
+// 将数据写给User端
 func (u *user) Write() {
 	for {
 		select {
@@ -84,7 +97,7 @@ func (u *user) Write() {
 			_, err := u.conn.Write(data)
 			if err != nil && err != io.EOF {
 				u.exit <- err
-				reConnChan <- true
+				u.close <- err
 			}
 		}
 	}
@@ -106,6 +119,33 @@ func main() {
 	}
 	fmt.Printf("监听:%d端口, 等待client连接... \n", remotePort)
 
+	for {
+		// 有Client来连接了
+		clientConn, err := clientListener.Accept()
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("有Client连接: %s \n", clientConn.RemoteAddr())
+
+		client := &client{
+			conn:  clientConn,
+			read:  make(chan []byte),
+			write: make(chan []byte),
+			exit:  make(chan error),
+			close: make(chan error),
+		}
+
+		next := make(chan bool)
+		go Lister(client, next)
+
+		<-next
+		fmt.Println("重新等待新的client连接..")
+	}
+}
+
+func Lister(client *client, next chan bool) {
+	// 监听User来连接
 	userListener, err := net.Listen("tcp", fmt.Sprintf(":%d", localPort))
 	if err != nil {
 		panic(err)
@@ -115,38 +155,34 @@ func main() {
 	userConnChan := make(chan net.Conn)
 	go AcceptUserConn(userListener, userConnChan)
 
-	// 有Client来连接了
-	clientConn, err := clientListener.Accept()
-	if err != nil {
-		panic(err)
-	}
-
-	client := &client{
-		conn:  clientConn,
-		read:  make(chan []byte),
-		write: make(chan []byte),
-		exit:  make(chan error),
-	}
-
 	go client.Read()
 	go client.Write()
 
-	for {
+	exit := false
+
+	for !exit {
 		select {
+		case err := <-client.exit:
+			fmt.Printf("client出现错误, 开始重试, err: %s \n", err.Error())
+			next <- true
+			exit = true
+
 		case userConn := <-userConnChan:
 			user := &user{
 				conn:  userConn,
 				read:  make(chan []byte),
 				write: make(chan []byte),
 				exit:  make(chan error),
+				close: make(chan error),
 			}
+			go user.Read()
+			go user.Write()
+
 			go handle(client, user)
-		case <-reConnChan:
-			fmt.Println("重新监听连接")
-			go AcceptUserConn(userListener, userConnChan)
 		}
 	}
 
+	runtime.Goexit()
 }
 
 // 将两个Socket通道链接
@@ -156,19 +192,24 @@ func handle(client *client, user *user) {
 	for {
 		select {
 		case userRecv := <-user.read:
-			fmt.Println("收到从user发来的信息")
+			// 收到从user发来的信息
 			client.write <- userRecv
 		case clientRecv := <-client.read:
-			fmt.Println("收到从client发来的信息")
+			//fmt.Println("收到从client发来的信息")
 			user.write <- clientRecv
-		case err := <-client.exit:
-			fmt.Println(err.Error())
+
+		case err := <-client.close:
+			fmt.Println("client出现错误，关闭连接", err.Error())
 			_ = client.conn.Close()
 			_ = user.conn.Close()
-		case err := <-user.exit:
-			fmt.Println(err.Error())
-			_ = client.conn.Close()
+			// 结束当前goroutine
+			runtime.Goexit()
+
+		case err := <-user.close:
+			fmt.Println("user出现错误，关闭连接", err.Error())
 			_ = user.conn.Close()
+			_ = client.conn.Close()
+			runtime.Goexit()
 		}
 	}
 }
@@ -179,6 +220,6 @@ func AcceptUserConn(userListener net.Listener, connChan chan net.Conn) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("有user来连接...")
+	fmt.Printf("user connect: %s \n", userConn.RemoteAddr())
 	connChan <- userConn
 }
