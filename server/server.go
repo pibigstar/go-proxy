@@ -25,8 +25,9 @@ type client struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit  chan error
-	close chan error
+	exit   chan error
+	close  chan error
+	reConn chan bool
 }
 
 // 从Client端读取数据
@@ -45,6 +46,7 @@ func (c *client) Read() {
 		// 收到心跳包，原样返回
 		if data[0] == 'p' && data[1] == 'i' {
 			c.conn.Write([]byte("pi"))
+			fmt.Println("server收到心跳包")
 			continue
 		}
 		c.read <- data[:n]
@@ -118,6 +120,12 @@ func main() {
 		panic(err)
 	}
 	fmt.Printf("监听:%d端口, 等待client连接... \n", remotePort)
+	// 监听User来连接
+	userListener, err := net.Listen("tcp", fmt.Sprintf(":%d", localPort))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("监听:%d端口, 等待user连接.... \n", localPort)
 
 	for {
 		// 有Client来连接了
@@ -129,43 +137,35 @@ func main() {
 		fmt.Printf("有Client连接: %s \n", clientConn.RemoteAddr())
 
 		client := &client{
-			conn:  clientConn,
-			read:  make(chan []byte),
-			write: make(chan []byte),
-			exit:  make(chan error),
-			close: make(chan error),
+			conn:   clientConn,
+			read:   make(chan []byte),
+			write:  make(chan []byte),
+			exit:   make(chan error),
+			close:  make(chan error),
+			reConn: make(chan bool),
 		}
 
-		next := make(chan bool)
-		go Lister(client, next)
+		userConnChan := make(chan net.Conn)
+		go AcceptUserConn(userListener, userConnChan)
 
-		<-next
+		go HandleClient(client, userConnChan)
+
+		<-client.reConn
 		fmt.Println("重新等待新的client连接..")
 	}
 }
 
-func Lister(client *client, next chan bool) {
-	// 监听User来连接
-	userListener, err := net.Listen("tcp", fmt.Sprintf(":%d", localPort))
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("监听:%d端口, 等待user连接.... \n", localPort)
-
-	userConnChan := make(chan net.Conn)
-	go AcceptUserConn(userListener, userConnChan)
+func HandleClient(client *client, userConnChan chan net.Conn) {
 
 	go client.Read()
 	go client.Write()
 
-	exit := false
-
-	for !exit {
+	for {
 		select {
 		case err := <-client.exit:
 			fmt.Printf("client出现错误, 开始重试, err: %s \n", err.Error())
-			next <- true
-			exit = true
+			client.reConn <- true
+			runtime.Goexit()
 
 		case userConn := <-userConnChan:
 			user := &user{
@@ -181,8 +181,6 @@ func Lister(client *client, next chan bool) {
 			go handle(client, user)
 		}
 	}
-
-	runtime.Goexit()
 }
 
 // 将两个Socket通道链接

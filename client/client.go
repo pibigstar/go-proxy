@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"strings"
 )
 
 var (
@@ -26,7 +27,8 @@ type server struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit chan error
+	exit   chan error
+	reConn chan bool
 }
 
 // 从Server端读取数据
@@ -35,15 +37,17 @@ func (s *server) Read() {
 		data := make([]byte, 10240)
 		n, err := s.conn.Read(data)
 		if err != nil {
-			// TODO: 如果是超时，则发送心跳包
-			s.exit <- err
-			//为了保持与server有一条tcp通路,先给server发送个0
-			s.write <- []byte("0")
+			if strings.Contains(err.Error(), "timeout") {
+				s.reConn <- true
+				runtime.Goexit()
+			}
+			fmt.Println("从server读取数据失败, ", err.Error())
 		}
 
 		// 如果收到心跳包，则原样返回
 		if data[0] == 'p' && data[1] == 'i' {
 			s.conn.Write([]byte("pi"))
+			fmt.Println("client收到心跳包")
 			continue
 		}
 		s.read <- data[:n]
@@ -58,6 +62,11 @@ func (s *server) Write() {
 			_, err := s.conn.Write(data)
 			if err != nil && err != io.EOF {
 				s.exit <- err
+			}
+		default:
+			_, err := s.conn.Write([]byte("pi"))
+			if err != nil {
+				s.reConn <- true
 			}
 		}
 	}
@@ -105,12 +114,14 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+
 		fmt.Printf("已连接server: %s \n", serverConn.RemoteAddr())
 		server := &server{
-			conn:  serverConn,
-			read:  make(chan []byte),
-			write: make(chan []byte),
-			exit:  make(chan error),
+			conn:   serverConn,
+			read:   make(chan []byte),
+			write:  make(chan []byte),
+			exit:   make(chan error),
+			reConn: make(chan bool),
 		}
 
 		go server.Read()
@@ -119,7 +130,8 @@ func main() {
 		next := make(chan bool)
 		go handle(server, next)
 
-		<-next
+		<-server.reConn
+		_ = server.conn.Close()
 	}
 
 }
@@ -152,9 +164,8 @@ func handle(server *server, next chan bool) {
 	for {
 		select {
 		case data := <-server.read:
-			if data[0] != '0' {
-				local.write <- data
-			}
+			local.write <- data
+
 		case data := <-local.read:
 			server.write <- data
 
@@ -162,13 +173,9 @@ func handle(server *server, next chan bool) {
 			fmt.Printf("server have err: %s", err.Error())
 			_ = server.conn.Close()
 			_ = local.conn.Close()
-			runtime.Goexit()
-
 		case err := <-local.exit:
 			fmt.Printf("server have err: %s", err.Error())
-			_ = server.conn.Close()
 			_ = local.conn.Close()
-			runtime.Goexit()
 		}
 	}
 }
