@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -25,27 +26,31 @@ type client struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit   chan error
-	close  chan error
+	exit chan error
+	// 重连通道
 	reConn chan bool
 }
 
 // 从Client端读取数据
 func (c *client) Read() {
+	// 如果10秒钟内没有消息传输，则Read函数会返回一个timeout的错误
+	_ = c.conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 	for {
-		_ = c.conn.SetReadDeadline(time.Now().Add(time.Second * 60))
 		data := make([]byte, 10240)
 		n, err := c.conn.Read(data)
-
 		if err != nil && err != io.EOF {
+			if strings.Contains(err.Error(), "timeout") {
+				// 设置读取时间为3秒，3秒后若读取不到, 则err会抛出timeout,然后发送心跳
+				_ = c.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+				c.conn.Write([]byte("pi"))
+				continue
+			}
 			fmt.Println("读取出现错误...")
 			c.exit <- err
-			c.close <- err
 		}
 
-		// 收到心跳包，原样返回
+		// 收到心跳包,则跳过
 		if data[0] == 'p' && data[1] == 'i' {
-			c.conn.Write([]byte("pi"))
 			fmt.Println("server收到心跳包")
 			continue
 		}
@@ -61,7 +66,6 @@ func (c *client) Write() {
 			_, err := c.conn.Write(data)
 			if err != nil && err != io.EOF {
 				c.exit <- err
-				c.close <- err
 			}
 		}
 	}
@@ -73,8 +77,7 @@ type user struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit  chan error
-	close chan error
+	exit chan error
 }
 
 // 从User端读取数据
@@ -85,7 +88,6 @@ func (u *user) Read() {
 		n, err := u.conn.Read(data)
 		if err != nil && err != io.EOF {
 			u.exit <- err
-			u.close <- err
 		}
 		u.read <- data[:n]
 	}
@@ -99,7 +101,6 @@ func (u *user) Write() {
 			_, err := u.conn.Write(data)
 			if err != nil && err != io.EOF {
 				u.exit <- err
-				u.close <- err
 			}
 		}
 	}
@@ -141,7 +142,6 @@ func main() {
 			read:   make(chan []byte),
 			write:  make(chan []byte),
 			exit:   make(chan error),
-			close:  make(chan error),
 			reConn: make(chan bool),
 		}
 
@@ -173,7 +173,6 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 				read:  make(chan []byte),
 				write: make(chan []byte),
 				exit:  make(chan error),
-				close: make(chan error),
 			}
 			go user.Read()
 			go user.Write()
@@ -193,21 +192,20 @@ func handle(client *client, user *user) {
 			// 收到从user发来的信息
 			client.write <- userRecv
 		case clientRecv := <-client.read:
-			//fmt.Println("收到从client发来的信息")
+			// 收到从client发来的信息
 			user.write <- clientRecv
 
-		case err := <-client.close:
-			fmt.Println("client出现错误，关闭连接", err.Error())
+		case err := <-client.exit:
+			fmt.Println("client出现错误, 关闭连接", err.Error())
 			_ = client.conn.Close()
 			_ = user.conn.Close()
+			client.reConn <- true
 			// 结束当前goroutine
 			runtime.Goexit()
 
-		case err := <-user.close:
+		case err := <-user.exit:
 			fmt.Println("user出现错误，关闭连接", err.Error())
 			_ = user.conn.Close()
-			_ = client.conn.Close()
-			runtime.Goexit()
 		}
 	}
 }

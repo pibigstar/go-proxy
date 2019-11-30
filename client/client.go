@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"time"
 )
 
 var (
@@ -27,26 +28,33 @@ type server struct {
 	read  chan []byte
 	write chan []byte
 	// 异常退出通道
-	exit   chan error
+	exit chan error
+	// 重连通道
 	reConn chan bool
 }
 
 // 从Server端读取数据
 func (s *server) Read() {
+	// 如果10秒钟内没有消息传输，则Read函数会返回一个timeout的错误
+	_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 	for {
 		data := make([]byte, 10240)
 		n, err := s.conn.Read(data)
-		if err != nil {
+		if err != nil && err != io.EOF {
+			// 读取超时，发送一个心跳包过去
 			if strings.Contains(err.Error(), "timeout") {
-				s.reConn <- true
-				runtime.Goexit()
+				// 3秒发一次心跳
+				_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+				s.conn.Write([]byte("pi"))
+				continue
 			}
 			fmt.Println("从server读取数据失败, ", err.Error())
+			s.exit <- err
+			runtime.Goexit()
 		}
 
-		// 如果收到心跳包，则原样返回
+		// 如果收到心跳包, 则跳过
 		if data[0] == 'p' && data[1] == 'i' {
-			s.conn.Write([]byte("pi"))
 			fmt.Println("client收到心跳包")
 			continue
 		}
@@ -62,11 +70,6 @@ func (s *server) Write() {
 			_, err := s.conn.Write(data)
 			if err != nil && err != io.EOF {
 				s.exit <- err
-			}
-		default:
-			_, err := s.conn.Write([]byte("pi"))
-			if err != nil {
-				s.reConn <- true
 			}
 		}
 	}
@@ -127,8 +130,7 @@ func main() {
 		go server.Read()
 		go server.Write()
 
-		next := make(chan bool)
-		go handle(server, next)
+		go handle(server)
 
 		<-server.reConn
 		_ = server.conn.Close()
@@ -136,13 +138,9 @@ func main() {
 
 }
 
-func handle(server *server, next chan bool) {
-
+func handle(server *server) {
 	// 等待server端发来的信息，也就是说user来请求server了
 	data := <-server.read
-
-	// 如果有信息发来，就开启下一个tcp连接
-	next <- true
 
 	localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if err != nil {
@@ -173,6 +171,8 @@ func handle(server *server, next chan bool) {
 			fmt.Printf("server have err: %s", err.Error())
 			_ = server.conn.Close()
 			_ = local.conn.Close()
+			server.reConn <- true
+
 		case err := <-local.exit:
 			fmt.Printf("server have err: %s", err.Error())
 			_ = local.conn.Close()
