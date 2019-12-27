@@ -61,5 +61,5 @@ jobs:
 
       - name: Build
         run: |
-          go build -v client/client.go
-          go build -v server/server.go
+          go build -v -o go-client client/client.go
+          go build -v -o go-server server/server.go
