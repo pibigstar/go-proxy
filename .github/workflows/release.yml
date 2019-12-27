@@ -21,5 +21,14 @@ jobs:
         uses: docker://goreleaser/goreleaser:latest
         with:
           args: release
+          workdir: ./client/
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+      - name: Create release on GitHub
+        uses: docker://goreleaser/goreleaser:latest
+        with:
+          args: release
+          workdir: ./server/
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
