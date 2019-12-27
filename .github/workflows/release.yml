@@ -17,18 +17,18 @@ jobs:
         with:
           args: check
 
-      - name: Create release on GitHub
+      - name: Create client on GitHub
         uses: docker://goreleaser/goreleaser:latest
         with:
           args: release
-          workdir: ./client/
+          workdir: go-proxy/client/
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
-      - name: Create release on GitHub
+      - name: Create server on GitHub
         uses: docker://goreleaser/goreleaser:latest
         with:
           args: release
-          workdir: ./server/
+          workdir: go-proxy/server/
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
