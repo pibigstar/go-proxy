@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v1
 
       - name: Run Unit tests.
-        run:  go test -short ./... -coverprofile=coverage.txt -covermode=atomic && bash < (curl -s https://codecov.io/bash)
+        run:  go test -short ./... -coverprofile=coverage.txt -covermode=atomic
 
       - name: Upload Coverage report to CodeCov
         uses: codecov/codecov-action@v1.0.0
