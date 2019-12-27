@@ -25,6 +25,6 @@ jobs:
         fi
 
     - name: Build
-      run:
+      run: |
         go build -v client/client.go
         go build -v server/server.go
