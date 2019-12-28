@@ -17,6 +17,9 @@ jobs:
         with:
           args: check
 
+      - name: pwd
+        run: pwd
+
       - name: Create client on GitHub
         uses: docker://goreleaser/goreleaser:latest
         with:
@@ -24,6 +27,9 @@ jobs:
           workdir: go-proxy/client/
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+      - name: pwd
+        run: pwd
 
       - name: Create server on GitHub
         uses: docker://goreleaser/goreleaser:latest
