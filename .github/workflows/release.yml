@@ -16,21 +16,12 @@ jobs:
         uses: actions/setup-go@v1
         with:
           go-version: 1.13.x
-      -
-        name: Run Client GoReleaser
-        uses: goreleaser/goreleaser-action@v1
-        with:
-          version: latest
-          args: release --help
-          workdir: ./client
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Server GoReleaser
         uses: goreleaser/goreleaser-action@v1
         with:
           version: latest
-          args: release --rm-dist --output=server
+          args: release --rm-dist
           workdir: ./server
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
