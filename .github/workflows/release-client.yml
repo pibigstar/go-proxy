@@ -1,4 +1,4 @@
-name: goreleaser
+name: build-client
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
         with:
           go-version: 1.13.x
       -
-        name: Run GoReleaser
+        name: Run Client GoReleaser
         uses: goreleaser/goreleaser-action@v1
         with:
           version: latest
