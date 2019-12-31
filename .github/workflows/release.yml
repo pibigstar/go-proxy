@@ -22,16 +22,5 @@ jobs:
         with:
           version: latest
           args: release --rm-dist
-          workdir: ./client
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run Server GoReleaser
-        uses: goreleaser/goreleaser-action@v1
-        with:
-          version: latest
-          args: release --rm-dist
-          workdir: ./server
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
