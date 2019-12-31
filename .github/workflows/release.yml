@@ -1,4 +1,4 @@
-name: build-client
+name: goreleaser
 
 on:
   pull_request:
@@ -21,7 +21,16 @@ jobs:
         uses: goreleaser/goreleaser-action@v1
         with:
           version: latest
-          args: release --rm-dist
+          args: release --rm-dist --output=client
           workdir: ./client
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Server GoReleaser
+        uses: goreleaser/goreleaser-action@v1
+        with:
+          version: latest
+          args: release --rm-dist --output=server
+          workdir: ./server
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
