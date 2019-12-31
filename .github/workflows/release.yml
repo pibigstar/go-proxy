@@ -1,40 +1,37 @@
-name: Release
+name: goreleaser
+
 on:
-  create:
-    tags:
-      - v*
+  pull_request:
+  push:
 
 jobs:
-  release:
-    name: Release on GitHub
+  goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out code
+      -
+        name: Checkout
         uses: actions/checkout@v1
-
-      - name: Validates GO releaser config
-        uses: docker://goreleaser/goreleaser:latest
+      -
+        name: Set up Go
+        uses: actions/setup-go@v1
         with:
-          args: check
-
-      - name: pwd
-        run: pwd
-
-      - name: Create client on GitHub
-        uses: docker://goreleaser/goreleaser:latest
+          go-version: 1.13.x
+      -
+        name: Run Client GoReleaser
+        uses: goreleaser/goreleaser-action@v1
         with:
-          args: release
-          workdir: client/
+          version: latest
+          args: release --rm-dist
+          workdir: ./client
         env:
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: pwd
-        run: pwd
-
-      - name: Create server on GitHub
-        uses: docker://goreleaser/goreleaser:latest
+      - name: Run Server GoReleaser
+        uses: goreleaser/goreleaser-action@v1
         with:
-          args: release
-          workdir: server/
+          version: latest
+          args: release --rm-dist
+          workdir: ./server
         env:
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
