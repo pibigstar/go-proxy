@@ -47,6 +47,7 @@ func (c *client) Read() {
 			}
 			fmt.Println("读取出现错误...")
 			c.exit <- err
+			return
 		}
 
 		// 收到心跳包,则跳过
@@ -66,6 +67,7 @@ func (c *client) Write() {
 			_, err := c.conn.Write(data)
 			if err != nil && err != io.EOF {
 				c.exit <- err
+				return
 			}
 		}
 	}
@@ -88,6 +90,7 @@ func (u *user) Read() {
 		n, err := u.conn.Read(data)
 		if err != nil && err != io.EOF {
 			u.exit <- err
+			return
 		}
 		u.read <- data[:n]
 	}
@@ -101,6 +104,7 @@ func (u *user) Write() {
 			_, err := u.conn.Write(data)
 			if err != nil && err != io.EOF {
 				u.exit <- err
+				return
 			}
 		}
 	}
@@ -160,12 +164,15 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 	go client.Read()
 	go client.Write()
 
+	close := make(chan struct{})
+
 	for {
 		select {
-		case err := <-client.exit:
-			fmt.Printf("client出现错误, 开始重试, err: %s \n", err.Error())
-			client.reConn <- true
-			runtime.Goexit()
+		/*调至handle函数接收，避免竞争*/
+		//case err := <-client.exit:
+		//	fmt.Printf("client出现错误, 开始重试, err: %s \n", err.Error())
+		//	client.reConn <- true
+		//	runtime.Goexit()
 
 		case userConn := <-userConnChan:
 			user := &user{
@@ -177,7 +184,10 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 			go user.Read()
 			go user.Write()
 
-			go handle(client, user)
+			go handle(client, user, close)
+		case <-close:
+			// 终止信号， client.exit 结束当前协程
+			runtime.Goexit()
 		}
 	}
 }
@@ -185,7 +195,7 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 // 将两个Socket通道链接
 // 1. 将从user收到的信息发给client
 // 2. 将从client收到信息发给user
-func handle(client *client, user *user) {
+func handle(client *client, user *user, close chan struct{}) {
 	for {
 		select {
 		case userRecv := <-user.read:
@@ -200,12 +210,15 @@ func handle(client *client, user *user) {
 			_ = client.conn.Close()
 			_ = user.conn.Close()
 			client.reConn <- true
+			close <- struct{}{}
 			// 结束当前goroutine
 			runtime.Goexit()
 
 		case err := <-user.exit:
 			fmt.Println("user出现错误，关闭连接", err.Error())
 			_ = user.conn.Close()
+			// 结束当前goroutine
+			runtime.Goexit()
 		}
 	}
 }

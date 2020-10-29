@@ -70,6 +70,7 @@ func (s *server) Write() {
 			_, err := s.conn.Write(data)
 			if err != nil && err != io.EOF {
 				s.exit <- err
+				return
 			}
 		}
 	}
@@ -91,6 +92,7 @@ func (l *local) Read() {
 		n, err := l.conn.Read(data)
 		if err != nil {
 			l.exit <- err
+			return
 		}
 		l.read <- data[:n]
 	}
@@ -103,6 +105,7 @@ func (l *local) Write() {
 			_, err := l.conn.Write(data)
 			if err != nil {
 				l.exit <- err
+				return
 			}
 		}
 	}
@@ -140,7 +143,7 @@ func main() {
 
 func handle(server *server) {
 	// 等待server端发来的信息，也就是说user来请求server了
-	data := <-server.read
+	//data := <-server.read
 
 	localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if err != nil {
@@ -157,7 +160,8 @@ func handle(server *server) {
 	go local.Read()
 	go local.Write()
 
-	local.write <- data
+	/*与下方代码重复*/
+	//local.write <- data
 
 	for {
 		select {
@@ -172,10 +176,11 @@ func handle(server *server) {
 			_ = server.conn.Close()
 			_ = local.conn.Close()
 			server.reConn <- true
-
+			runtime.Goexit() // 结束协程
 		case err := <-local.exit:
 			fmt.Printf("server have err: %s", err.Error())
 			_ = local.conn.Close()
+			runtime.Goexit() // 结束协程
 		}
 	}
 }
