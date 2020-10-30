@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -164,16 +164,10 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 	go client.Read()
 	go client.Write()
 
-	close := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 
 	for {
 		select {
-		/*调至handle函数接收，避免竞争*/
-		//case err := <-client.exit:
-		//	fmt.Printf("client出现错误, 开始重试, err: %s \n", err.Error())
-		//	client.reConn <- true
-		//	runtime.Goexit()
-
 		case userConn := <-userConnChan:
 			user := &user{
 				conn:  userConn,
@@ -184,10 +178,12 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 			go user.Read()
 			go user.Write()
 
-			go handle(client, user, close)
-		case <-close:
-			// 终止信号， client.exit 结束当前协程
-			runtime.Goexit()
+			go handle(client, user, ctx)
+		case err := <-client.exit:
+			fmt.Println("client出现错误, 关闭连接", err.Error())
+			cancel()
+			client.reConn <- true
+			return
 		}
 	}
 }
@@ -195,7 +191,7 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 // 将两个Socket通道链接
 // 1. 将从user收到的信息发给client
 // 2. 将从client收到信息发给user
-func handle(client *client, user *user, close chan struct{}) {
+func handle(client *client, user *user, ctx context.Context) {
 	for {
 		select {
 		case userRecv := <-user.read:
@@ -205,20 +201,15 @@ func handle(client *client, user *user, close chan struct{}) {
 			// 收到从client发来的信息
 			user.write <- clientRecv
 
-		case err := <-client.exit:
-			fmt.Println("client出现错误, 关闭连接", err.Error())
+		case <-ctx.Done():
 			_ = client.conn.Close()
 			_ = user.conn.Close()
-			client.reConn <- true
-			close <- struct{}{}
-			// 结束当前goroutine
-			runtime.Goexit()
+			return
 
 		case err := <-user.exit:
 			fmt.Println("user出现错误，关闭连接", err.Error())
 			_ = user.conn.Close()
-			// 结束当前goroutine
-			runtime.Goexit()
+			return
 		}
 	}
 }

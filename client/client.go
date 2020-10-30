@@ -176,11 +176,11 @@ func handle(server *server) {
 			_ = server.conn.Close()
 			_ = local.conn.Close()
 			server.reConn <- true
-			runtime.Goexit() // 结束协程
+			return
 		case err := <-local.exit:
 			fmt.Printf("server have err: %s", err.Error())
 			_ = local.conn.Close()
-			runtime.Goexit() // 结束协程
+			return
 		}
 	}
 }
