@@ -179,21 +179,30 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 	go client.Read(ctx)
 	go client.Write(ctx)
 
+	user := &user{
+		read:  make(chan []byte),
+		write: make(chan []byte),
+		exit:  make(chan error),
+	}
+
+	defer func() {
+		_ = client.conn.Close()
+		_ = user.conn.Close()
+		client.reConn <- true
+	}()
+
 	for {
 		select {
 		case userConn := <-userConnChan:
-			user := &user{
-				conn:  userConn,
-				read:  make(chan []byte),
-				write: make(chan []byte),
-				exit:  make(chan error),
-			}
-
+			user.conn = userConn
 			go handle(ctx, client, user)
 		case err := <-client.exit:
 			fmt.Println("client出现错误, 关闭连接", err.Error())
 			cancel()
-			client.reConn <- true
+			return
+		case err := <-user.exit:
+			fmt.Println("user出现错误，关闭连接", err.Error())
+			cancel()
 			return
 		}
 	}
@@ -203,9 +212,8 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 // 1. 将从user收到的信息发给client
 // 2. 将从client收到信息发给user
 func handle(ctx context.Context, client *client, user *user) {
-	userCtx, cancel := context.WithCancel(ctx)
-	go user.Read(userCtx)
-	go user.Write(userCtx)
+	go user.Read(ctx)
+	go user.Write(ctx)
 
 	for {
 		select {
@@ -217,15 +225,6 @@ func handle(ctx context.Context, client *client, user *user) {
 			user.write <- clientRecv
 
 		case <-ctx.Done():
-			_ = client.conn.Close()
-			_ = user.conn.Close()
-			cancel() // client关闭，关闭user读写协程
-			return
-
-		case err := <-user.exit:
-			fmt.Println("user出现错误，关闭连接", err.Error())
-			_ = user.conn.Close()
-			cancel() // user错误，关闭user读写协程
 			return
 		}
 	}
