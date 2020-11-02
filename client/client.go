@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -34,38 +34,45 @@ type server struct {
 }
 
 // 从Server端读取数据
-func (s *server) Read() {
+func (s *server) Read(ctx context.Context) {
 	// 如果10秒钟内没有消息传输，则Read函数会返回一个timeout的错误
 	_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 	for {
-		data := make([]byte, 10240)
-		n, err := s.conn.Read(data)
-		if err != nil && err != io.EOF {
-			// 读取超时，发送一个心跳包过去
-			if strings.Contains(err.Error(), "timeout") {
-				// 3秒发一次心跳
-				_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
-				s.conn.Write([]byte("pi"))
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			data := make([]byte, 10240)
+			n, err := s.conn.Read(data)
+			if err != nil && err != io.EOF {
+				// 读取超时，发送一个心跳包过去
+				if strings.Contains(err.Error(), "timeout") {
+					// 3秒发一次心跳
+					_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+					s.conn.Write([]byte("pi"))
+					continue
+				}
+				fmt.Println("从server读取数据失败, ", err.Error())
+				s.exit <- err
+				return
+			}
+
+			// 如果收到心跳包, 则跳过
+			if data[0] == 'p' && data[1] == 'i' {
+				fmt.Println("client收到心跳包")
 				continue
 			}
-			fmt.Println("从server读取数据失败, ", err.Error())
-			s.exit <- err
-			runtime.Goexit()
+			s.read <- data[:n]
 		}
-
-		// 如果收到心跳包, 则跳过
-		if data[0] == 'p' && data[1] == 'i' {
-			fmt.Println("client收到心跳包")
-			continue
-		}
-		s.read <- data[:n]
 	}
 }
 
 // 将数据写入到Server端
-func (s *server) Write() {
+func (s *server) Write(ctx context.Context) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case data := <-s.write:
 			_, err := s.conn.Write(data)
 			if err != nil && err != io.EOF {
@@ -85,22 +92,29 @@ type local struct {
 	exit chan error
 }
 
-func (l *local) Read() {
+func (l *local) Read(ctx context.Context) {
 
 	for {
-		data := make([]byte, 10240)
-		n, err := l.conn.Read(data)
-		if err != nil {
-			l.exit <- err
+		select {
+		case <-ctx.Done():
 			return
+		default:
+			data := make([]byte, 10240)
+			n, err := l.conn.Read(data)
+			if err != nil {
+				l.exit <- err
+				return
+			}
+			l.read <- data[:n]
 		}
-		l.read <- data[:n]
 	}
 }
 
-func (l *local) Write() {
+func (l *local) Write(ctx context.Context) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case data := <-l.write:
 			_, err := l.conn.Write(data)
 			if err != nil {
@@ -130,20 +144,19 @@ func main() {
 			reConn: make(chan bool),
 		}
 
-		go server.Read()
-		go server.Write()
-
 		go handle(server)
-
 		<-server.reConn
-		_ = server.conn.Close()
+		//_ = server.conn.Close()
 	}
 
 }
 
 func handle(server *server) {
 	// 等待server端发来的信息，也就是说user来请求server了
-	//data := <-server.read
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go server.Read(ctx)
+	go server.Write(ctx)
 
 	localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if err != nil {
@@ -157,11 +170,14 @@ func handle(server *server) {
 		exit:  make(chan error),
 	}
 
-	go local.Read()
-	go local.Write()
+	go local.Read(ctx)
+	go local.Write(ctx)
 
-	/*与下方代码重复*/
-	//local.write <- data
+	defer func() {
+		_ = server.conn.Close()
+		_ = local.conn.Close()
+		server.reConn <- true
+	}()
 
 	for {
 		select {
@@ -173,13 +189,11 @@ func handle(server *server) {
 
 		case err := <-server.exit:
 			fmt.Printf("server have err: %s", err.Error())
-			_ = server.conn.Close()
-			_ = local.conn.Close()
-			server.reConn <- true
+			cancel()
 			return
 		case err := <-local.exit:
-			fmt.Printf("server have err: %s", err.Error())
-			_ = local.conn.Close()
+			fmt.Printf("local have err: %s", err.Error())
+			cancel()
 			return
 		}
 	}
